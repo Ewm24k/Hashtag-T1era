@@ -9,11 +9,9 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-# Enable CORS to allow your React app to talk to this Python app
 CORS(app) 
 
 # Initialize Apify Client from Environment Variable
-# You will set this in Render Dashboard later
 APIFY_TOKEN = os.environ.get('APIFY_TOKEN')
 ACTOR_ID = 'clockworks/tiktok-scraper'
 
@@ -36,15 +34,15 @@ def analyze_trends():
         client = ApifyClient(APIFY_TOKEN)
 
         # 1. Run the Actor
+        # FIX: searchSection must be "" (empty string) for Top results, not "top"
         run_input = {
             "search": keywords,
             "resultsPerPage": 15,
             "excludePinnedPosts": True,
-            "searchSection": "top",
+            "searchSection": "", 
         }
 
-        # Run synchronously (for simplicity in this prototype)
-        # In a high-scale app, you might use webhooks, but this is fine for now.
+        # Run synchronously
         run = client.actor(ACTOR_ID).call(run_input=run_input)
 
         if not run:
@@ -54,9 +52,17 @@ def analyze_trends():
         dataset_items = client.dataset(run["defaultDatasetId"]).list_items().items
 
         if not dataset_items:
-            return jsonify({"error": "No data found"}), 404
+            # If empty, return 200 with empty data rather than 404 to avoid frontend errors
+            logger.warning("No items returned from Apify")
+            return jsonify({
+                "trending_hashtags": [],
+                "top_videos": [],
+                "niche_stats": {"total_posts": 0, "competition_level": "Low"},
+                "sample_caption": "",
+                "total_niche_views": "0"
+            })
 
-        # 3. Process Data (Python Version of your TypeScript Logic)
+        # 3. Process Data
         hashtags_map = {}
         total_views = 0
         max_plays = -1
@@ -65,14 +71,14 @@ def analyze_trends():
         for item in dataset_items:
             # Aggregate Hashtags
             tags = item.get('hashtags', [])
-            for tag in tags:
-                name = tag.get('name')
-                if name:
-                    hashtags_map[name] = hashtags_map.get(name, 0) + 1
+            if tags:
+                for tag in tags:
+                    name = tag.get('name')
+                    if name:
+                        hashtags_map[name] = hashtags_map.get(name, 0) + 1
             
             # Aggregate Stats
             stats = item.get('stats', {})
-            # Handle different Apify output formats (sometimes stats.playCount, sometimes just playCount)
             plays = stats.get('playCount', item.get('playCount', 0))
             total_views += plays
             
@@ -123,9 +129,9 @@ def analyze_trends():
 
     except Exception as e:
         logger.error(f"Error processing request: {str(e)}")
+        # Return error details to help debugging
         return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
-    # Render provides a PORT env var
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
